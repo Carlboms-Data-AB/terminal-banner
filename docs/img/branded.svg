@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="368" height="230" viewBox="0 0 368 230" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,&quot;DejaVu Sans Mono&quot;,monospace" font-size="15">
+<rect width="368" height="230" rx="8" fill="#0d1117"/>
+<rect width="368" height="30" rx="8" fill="#161b22"/>
+<rect y="22" width="368" height="8" fill="#161b22"/>
+<circle cx="18" cy="15" r="6" fill="#ff5f56"/>
+<circle cx="38" cy="15" r="6" fill="#ffbd2e"/>
+<circle cx="58" cy="15" r="6" fill="#27c93f"/>
+<text x="16" y="58" xml:space="preserve">
+<tspan x="16" fill="#8be9fd">========================================</tspan>
+</text>
+<text x="16" y="79" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9">   </tspan>
+<tspan fill="#c9d1d9" font-weight="700">Carlboms Data AB</tspan>
+<tspan fill="#c9d1d9">  </tspan>
+<tspan fill="#c9d1d9" opacity="0.6">// homelab</tspan>
+</text>
+<text x="16" y="100" xml:space="preserve">
+<tspan x="16" fill="#8be9fd">========================================</tspan>
+</text>
+<text x="16" y="121" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Host    : cloud-server-10141984</tspan>
+</text>
+<text x="16" y="142" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> VPN IP  : </tspan>
+<tspan fill="#5af78e">100.91.68.49</tspan>
+</text>
+<text x="16" y="163" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> CasaOS  : </tspan>
+<tspan fill="#8be9fd">http://100.91.68.49</tspan>
+</text>
+<text x="16" y="184" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Ports   : 22, 80, 443</tspan>
+</text>
+<text x="16" y="205" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> </tspan>
+<tspan fill="#ff6b6b">*** System restart required ***</tspan>
+</text>
+</svg>

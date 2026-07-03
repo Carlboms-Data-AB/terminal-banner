@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="443" height="314" viewBox="0 0 443 314" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,&quot;DejaVu Sans Mono&quot;,monospace" font-size="15">
+<rect width="443" height="314" rx="8" fill="#0d1117"/>
+<rect width="443" height="30" rx="8" fill="#161b22"/>
+<rect y="22" width="443" height="8" fill="#161b22"/>
+<circle cx="18" cy="15" r="6" fill="#ff5f56"/>
+<circle cx="38" cy="15" r="6" fill="#ffbd2e"/>
+<circle cx="58" cy="15" r="6" fill="#27c93f"/>
+<text x="16" y="58" xml:space="preserve">
+<tspan x="16" fill="#8be9fd" font-weight="700">Copyright Carlboms Data AB</tspan>
+</text>
+<text x="16" y="79" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9">----------------------------------------</tspan>
+</text>
+<text x="16" y="100" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Host    : cloud-server-10141984</tspan>
+</text>
+<text x="16" y="121" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> VPN IP  : 100.91.68.49</tspan>
+</text>
+<text x="16" y="142" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> IP      : 81.88.19.36 (ens3), 100.91.68.49 (wt0)</tspan>
+</text>
+<text x="16" y="163" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Uptime  : 3 days, 4 hours</tspan>
+</text>
+<text x="16" y="184" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Load    : 0.08</tspan>
+</text>
+<text x="16" y="205" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Disk /  : 19% of 96G</tspan>
+</text>
+<text x="16" y="226" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Memory  : 35%</tspan>
+</text>
+<text x="16" y="247" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> Ports   : 22, 80, 443</tspan>
+</text>
+<text x="16" y="268" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> CasaOS  : http://100.91.68.49</tspan>
+</text>
+<text x="16" y="289" xml:space="preserve">
+<tspan x="16" fill="#c9d1d9"> </tspan>
+<tspan fill="#ff6b6b">*** System restart required ***</tspan>
+</text>
+</svg>

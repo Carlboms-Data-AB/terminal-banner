@@ -8,22 +8,23 @@ picks up the new layout automatically — while filling in **live, per-host valu
 Shows on **SSH login**, **local console login**, and **desktop terminal windows**,
 and always reads a **local** copy, so it works even when the host is offline.
 
-Example:
+<p align="center">
+  <img src="docs/img/server.svg" alt="Full server banner with host info, VPN IP, ports, CasaOS link and reboot notice" width="460">
+</p>
 
-```
-Copyright Carlboms Data AB
-----------------------------------------
- Host    : cloud-server-10141984
- VPN IP  : 100.91.68.49
- IP      : 81.88.19.36 (ens3), 100.91.68.49 (wt0)
- Uptime  : 3 days, 4 hours
- Load    : 0.08
- Disk /  : 19% of 96G
- Memory  : 35%
- Ports   : 22, 80, 443
- CasaOS  : http://100.91.68.49
- *** System restart required ***
-```
+Ships with several ready-to-use templates in [`examples/`](examples/) — copy one
+into `message.txt` to adopt it:
+
+| Example | Looks like |
+|---------|-----------|
+| [`server.txt`](examples/server.txt) — full system summary | <img src="docs/img/server.svg" alt="server example" width="360"> |
+| [`branded.txt`](examples/branded.txt) — coloured header + homelab links | <img src="docs/img/branded.svg" alt="branded example" width="360"> |
+| [`ascii-art.txt`](examples/ascii-art.txt) — ASCII art + colour | <img src="docs/img/ascii-art.svg" alt="ascii-art example" width="300"> |
+| [`minimal.txt`](examples/minimal.txt) — hostname + IP only | copyright, host, IP |
+| [`plain.txt`](examples/plain.txt) — one static line | `Copyright Carlboms Data AB` |
+
+> Screenshots are rendered from the example templates with sample data by
+> [`tools/render-svg.py`](tools/render-svg.py); real hosts fill in their own values.
 
 ## Install
 
