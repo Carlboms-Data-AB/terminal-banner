@@ -194,18 +194,19 @@ fi
 # re-running the installer never clobbers edits you've made on the box.
 if [[ ! -e "$STATE" ]]; then
     cat > "$STATE" <<'MSG_EOF'
-Copyright Carlboms Data AB
-----------------------------------------
- Host    : {{HOSTNAME}}
- OS      : {{OS}}
- IP      : {{IP}}
- VPN IP  : {{VPNIP}}
- CasaOS  : {{URL_WT0_PORT_80}}
- Uptime  : {{UPTIME}}
- Load    : {{LOAD1}} {{LOAD5}} {{LOAD15}}
- Disk /  : {{DISK}}
- Memory  : {{MEM}}
- Ports   : {{PORTS}}
+ {{BOLD}}{{CYAN}}▗▄▖{{RESET}}
+ {{BOLD}}{{CYAN}}▐█▌{{RESET}}  {{BOLD}}CARLBOMS DATA AB{{RESET}}
+ {{BOLD}}{{CYAN}}▝▀▘{{RESET}}  {{DIM}}infrastructure node{{RESET}}
+ {{DIM}}{{CYAN}}────────────────────────────────────────{{RESET}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}Host  {{RESET}} {{HOSTNAME}}   {{DIM}}{{OS}}{{RESET}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}IP    {{RESET}} {{IP}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}VPN   {{RESET}} {{GREEN}}{{VPNIP}}{{RESET}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}CasaOS{{RESET}} {{BLUE}}{{URL_WT0_PORT_80}}{{RESET}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}Uptime{{RESET}} {{UPTIME}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}Load  {{RESET}} {{LOAD1}} {{LOAD5}} {{LOAD15}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}Disk  {{RESET}} {{DISK}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}Memory{{RESET}} {{MEM}}
+ {{CYAN}}{{BOLD}}▪{{RESET}} {{BOLD}}Ports {{RESET}} {{DIM}}{{PORTS}}{{RESET}}
  {{REBOOT}}
 MSG_EOF
 fi
