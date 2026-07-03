@@ -4,6 +4,7 @@ Copyright Carlboms Data AB
  OS      : {{OS}}
  IP      : {{IP}}
  VPN IP  : {{VPNIP}}
+ CasaOS  : {{URL_WT0_PORT_80}}
  Uptime  : {{UPTIME}}
  Load    : {{LOAD1}} {{LOAD5}} {{LOAD15}}
  Disk /  : {{DISK}}
