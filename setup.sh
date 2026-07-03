@@ -180,7 +180,7 @@ for c in ip ss awk sed; do command -v "$c" >/dev/null 2>&1 || missing="$missing 
 [[ -n "$missing" ]] && echo "NOTE: missing tools (some tokens will be blank):$missing" \
     "- install iproute2 / procps / coreutils / gawk for full output." >&2
 
-echo "Installing terminal-banner ($mode) ..."
+printf '\n  \033[2mInstalling (%s)\342\200\246\033[0m\n' "$mode"
 mkdir -p "$CONF_DIR" "$CACHE_DIR"
 
 # Back up the existing /etc/motd once (records a symlink as text; copies a real file).
@@ -504,23 +504,14 @@ fi
 # Turn GitHub sync on (this run) or off (local mode removes any sync job).
 if [[ "$mode" == sync ]]; then install_sync; else remove_sync; fi
 
-echo
+printf '\n'
 if [[ "$mode" == sync ]]; then
-    echo "Installed. GitHub sync is ON — pulls the banner every ${SYNC_INTERVAL} min from:"
-    echo "    $SYNC_URL"
-    echo "  (host edits get overwritten by the sync; change message.txt in the repo)"
+    printf '  \033[32m\342\234\223 Installed\033[0m \342\200\224 syncing from %s every %s min.\n' "$SYNC_URL" "$SYNC_INTERVAL"
 else
-    echo "Installed. Banner is live — fully local, no GitHub sync."
+    printf '  \033[32m\342\234\223 Installed\033[0m \342\200\224 local, shows at every login.\n'
 fi
-echo "  Render   : $( use_update_motd_d && echo 'live at each login (/etc/update-motd.d)' || echo 'onto /etc/motd now (snapshot on this distro; live in interactive shells)' )"
-echo "  Menu     : sudo terminal-banner     (edit / preview / uninstall - local, no network)"
-echo "  Edit file: sudo nano $STATE"
-echo "  Preview  : sudo $RENDERER"
-echo
-echo "Current banner on this host:"
-echo "----------------------------------------"
+printf '\n'
 "$RENDERER" 2>/dev/null || true
-echo "----------------------------------------"
 
 # Install the local menu launcher so the whole thing stays one command on the
 # host with no network. Built from the action functions so it can't drift.
@@ -530,7 +521,7 @@ echo "----------------------------------------"
   declare -p CONF_DIR CACHE_DIR STATE MOTD_BACKUP DISABLED_LIST UPDATER RENDERER \
              LOCAL_UNINSTALL LAUNCHER MOTDD_SCRIPT MOTDD_LEGACY PROFILE_SNIPPET \
              BASHRC SVC TIMER CRON HOOK_MARK
-  declare -f has_systemd uninstall_body tw_clear tw_pause do_preview do_edit menu_local
+  declare -f has_systemd uninstall_body tw_clear tw_pause tw_header do_preview do_edit menu_local
   printf 'menu_local\n'
 } > "$LAUNCHER"
 chmod 0755 "$LAUNCHER"; chown root:root "$LAUNCHER"
@@ -539,15 +530,21 @@ chmod 0755 "$LAUNCHER"; chown root:root "$LAUNCHER"
 # ---- Menu actions -----------------------------------------------------------
 
 tw_clear() { command clear 2>/dev/null || printf '\033[2J\033[3J\033[H'; }
-tw_pause() { printf '\n  [enter] to continue '; read -r _ <&3 || true; }
+tw_pause() { printf '\n  \033[2m[enter] to continue\033[0m '; read -r _ <&3 || true; }
+
+# Coloured ASCII header shown atop the menu.
+tw_header() {
+    printf '\n  \033[36m\342\224\214\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\220\033[0m\n'
+    printf '  \033[36m\342\224\202\033[0m \033[1;32m\342\235\257_\033[0m     \033[36m\342\224\202\033[0m   \033[1;36mTERMINAL BANNER\033[0m\n'
+    printf '  \033[36m\342\224\224\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\230\033[0m   \033[2mlive host info, shown at every login\033[0m\n\n'
+}
 
 # ONE install action: press enter = local; paste a RAW message-file URL = sync.
 menu_install() {
-    printf '\n  Install / update.\n'
-    printf '   - press ENTER to keep it LOCAL (edit the banner on this host)\n'
-    printf '   - or paste a RAW message-file URL to SYNC from a repo, e.g.\n'
-    printf '       https://raw.githubusercontent.com/USER/REPO/main/message.txt\n'
-    printf '  > '
+    printf '\n  \033[1mInstall / update\033[0m\n'
+    printf '  Press \033[1mEnter\033[0m for a local banner, or paste a raw message.txt URL to sync\n'
+    printf '  \033[2m(e.g. https://raw.githubusercontent.com/USER/REPO/main/message.txt)\033[0m\n'
+    printf '  \342\200\272 '
     read -r _u <&3 || _u=''
     case "$_u" in
         http://*|https://*) SYNC_URL="$_u"; do_install sync ;;
@@ -571,8 +568,9 @@ menu_local() {
     exec 3</dev/tty 2>/dev/null || { echo "no terminal"; exit 1; }
     while true; do
         tw_clear
-        printf '  Terminal Banner\n  ========================\n\n'
-        printf '   1) Edit the banner\n   2) Preview\n   3) Uninstall\n   4) Quit\n\n  Choose [1-4]: '
+        tw_header
+        printf '   \033[1;36m1\033[0m  Edit the banner\n   \033[1;36m2\033[0m  Preview\n   \033[1;36m3\033[0m  Uninstall\n   \033[1;36m4\033[0m  Quit\n\n'
+        printf '  \033[2mchoose\033[0m \033[1;36m\342\235\257\033[0m '
         read -r c <&3 || c=4
         case "$c" in
             1) do_edit; tw_pause ;;
@@ -588,8 +586,9 @@ menu_local() {
 menu() {
     while true; do
         tw_clear
-        printf '  Terminal Banner\n  ========================\n\n'
-        printf '   1) Install / update\n   2) Edit the banner\n   3) Preview\n   4) Uninstall\n   5) Quit\n\n  Choose [1-5]: '
+        tw_header
+        printf '   \033[1;36m1\033[0m  Install / update\n   \033[1;36m2\033[0m  Edit the banner\n   \033[1;36m3\033[0m  Preview\n   \033[1;36m4\033[0m  Uninstall\n   \033[1;36m5\033[0m  Quit\n\n'
+        printf '  \033[2mchoose\033[0m \033[1;36m\342\235\257\033[0m '
         read -r c <&3 || c=5
         case "$c" in
             1) menu_install; tw_pause ;;
