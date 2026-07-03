@@ -1,20 +1,20 @@
 # terminal-welcome-message
 
-A custom login banner (MOTD) for Linux hosts, driven by a template in this repo.
-Edit [`message.txt`](message.txt) on GitHub and every host that ran the installer
-picks up the new **layout** automatically — while filling in **live, per-host
-values** (IP, uptime, temperature, listening ports, reboot status …) locally at
-display time.
+A custom login banner (MOTD) for Linux hosts. Install it with one command; after
+that it's **fully local** — the banner lives in `/etc/terminal-welcome/message`
+on each host and you edit it **right on the box**. Nothing is fetched from GitHub
+after setup. The renderer fills in **live, per-host values** (IP, uptime,
+temperature, listening ports, reboot status …) at display time.
 
 Shows on **SSH login**, **local console login**, and **desktop terminal windows**,
-and always reads a **local** copy, so it works even when the host is offline.
+and reads a **local** file, so it always works — online or off.
 
 <p align="center">
   <img src="docs/img/server.svg" alt="Server banner: host info, IP, temperature, ports, updates, reboot notice" width="460">
 </p>
 
-Ships with ready-to-use templates in [`examples/`](examples/) — copy one into
-`message.txt` to adopt it:
+Ships with ready-to-use templates in [`examples/`](examples/) — copy one onto a
+host's `/etc/terminal-welcome/message` to adopt it:
 
 | Example | Preview |
 |---------|---------|
@@ -32,40 +32,47 @@ Runnable as-is on Raspberry Pi OS / Debian / Ubuntu / Fedora / RHEL / Arch:
 curl -fsSL https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-welcome-message/main/setup.sh | sudo bash
 ```
 
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `--interval MINUTES` | `15` | how often to re-sync the template (1–59) |
-| `--branch NAME` | `main` | which branch to fetch `message.txt` from |
-| `--url URL` | — | fetch the template from a custom URL (self-host / staging) |
-| `--uninstall` | — | undo the install and restore the box |
+That's the whole install — it bootstraps from GitHub, sets up the renderer and a
+local banner file, and then never contacts GitHub again. Re-run the same line any
+time to update the engine; it won't touch a banner you've edited on the host.
+
+| Option | Meaning |
+|--------|---------|
+| `--uninstall` | undo the install and restore the box |
+| `-h`, `--help` | show usage |
 
 ```bash
-curl -fsSL .../setup.sh | sudo bash -s -- --interval 10          # sync every 10 min
 curl -fsSL .../setup.sh | sudo bash -s -- --uninstall            # remove
 ```
 
 ## Editing the banner
 
-`message.txt` is a template. Static text is shown as-is; `{{TOKENS}}` are
-replaced on each host with that host's live values. **A line is omitted only when
-a token in it resolves to empty** — so the reboot line only appears when a reboot
-is pending, the swap line only when swap exists, etc. Static lines with no token
-(e.g. a `Section:` header) are always kept.
+The banner is the file **`/etc/terminal-welcome/message` on the host**. Edit it
+there and the change shows at the next login — instantly, no sync, no GitHub:
 
-**Preview before you ship** with the bundled tool (runs anywhere — Mac or Linux,
-no root — using sample data, and flags typos):
+```bash
+sudo nano /etc/terminal-welcome/message       # edit on the box
+sudo /usr/local/sbin/terminal-welcome-render  # preview the result immediately
+```
+
+It's a template: static text is shown as-is; `{{TOKENS}}` are replaced with this
+host's live values. **A line is omitted only when a token in it resolves to
+empty** — so the reboot line only appears when a reboot is pending, the swap line
+only when swap exists, etc. Static lines with no token (e.g. a `Section:` header)
+are always kept.
+
+**Preview a template before you deploy it** with the bundled tool (runs anywhere
+— Mac or Linux, no root — using sample data, and flags typos):
 
 ```bash
 tools/preview.sh                 # preview ./message.txt
 tools/preview.sh examples/server.txt
 ```
 
-Test on a single host before touching everyone with `--url` / `--branch`:
-
-```bash
-# point one box at a work-in-progress branch, verify, then merge to main
-curl -fsSL .../setup.sh | sudo bash -s -- --branch my-edit
-```
+To change the **default** that fresh installs start with, edit
+[`message.txt`](message.txt) in the repo (it's the banner baked into `setup.sh`).
+Existing hosts are independent — re-running the installer never overwrites a
+banner you've edited locally.
 
 ### Token catalogue
 
@@ -141,9 +148,21 @@ curl -fsSL .../setup.sh | sudo bash -s -- --branch my-edit
 | `{{USERS}}` / `{{SESSIONS}}` | logged-in users / active sessions |
 | `{{WHO}}` | list of logged-in users |
 | `{{REBOOT}}` | `*** System restart required ***` in red when pending |
-| `{{PUBIP}}` | public IP — *cached* by the timer (offline-safe) |
-| `{{UPDATES}}` | pending package updates — *cached* by the timer |
+| `{{PUBIP}}` | public IP — *cached*; needs the optional refresh cron (below) |
+| `{{UPDATES}}` | pending package updates — *cached*; needs the optional refresh cron (below) |
 </details>
+
+> **`{{PUBIP}}` and `{{UPDATES}}` are opt-in.** They read a value cached on disk
+> that the local install doesn't populate on its own (that was the old sync job).
+> If you use them, refresh the cache from cron — purely local, no GitHub. E.g.
+> every 30 min write the public IP:
+>
+> ```bash
+> # /etc/cron.d/terminal-welcome-cache
+> */30 * * * * root sh -c 'curl -fs --max-time 4 https://api.ipify.org > /var/lib/terminal-welcome/pubip'
+> ```
+>
+> (write a count to `/var/lib/terminal-welcome/updates` the same way if you use `{{UPDATES}}`.)
 
 <details><summary><b>Generic (build your own)</b></summary>
 
@@ -172,48 +191,51 @@ GitHub. Emoji work too (they're UTF-8).
 
 ## How it works
 
-- **Login path (local, offline-safe).** On Debian/Ubuntu the banner is rendered
-  at each login by `/etc/update-motd.d/00-welcome`, so values are always current;
-  the stock banner/ad scripts are disabled so ours replaces them. On other distros
-  the banner is rendered onto `/etc/motd` on the timer.
+- **Login (Debian/Ubuntu/RPi OS).** The banner is rendered fresh at each login by
+  `/etc/update-motd.d/00-welcome`, so values are always current; the stock
+  banner/ad scripts are disabled so ours replaces them.
+- **Login (Fedora/RHEL/Arch, no `update-motd.d`).** The banner is rendered onto
+  `/etc/motd` at install (a point-in-time snapshot); live values still show in
+  interactive terminals via the shell snippet below.
 - **Desktop terminal windows** (non-login shells `pam_motd` never covers) render
   live via a guarded `/etc/profile.d` snippet.
-- **Sync path (background).** A systemd timer (cron fallback) fetches the template
-  text, strips escape sequences, and refreshes cached values (public IP, update
-  counts). If GitHub is unreachable the last template stays in place.
+- **No background sync.** After install nothing is fetched or scheduled — the
+  banner is a local file (`/etc/terminal-welcome/message`) that you own and edit.
 
 ## Security
 
-Only the template **text** is fetched — never executable code. The renderer is
-installed **once, locally**, and treats the template as **data**: tokens are
-string-substituted, the template is **never executed** (no `eval`), and the ESC
-control byte is stripped so ANSI/OSC escape sequences can't render. So even a
-compromised repo can only change banner text — not run code, even though the
-render runs as root at login.
+After install nothing is fetched from GitHub, so there's no ongoing supply-chain
+surface — the banner is a local file. The renderer treats that file as **data**:
+tokens are string-substituted, the template is **never executed** (no `eval`), and
+the ESC control byte is stripped so ANSI/OSC escape sequences can't render. So
+even a banner edited by an untrusted user can only change text — not run code,
+even though the render runs as root at login.
 
 ## Making it your own (forking)
 
 The engine is generic. To run your own copy:
 
-- Point hosts at your template with `--url https://…/message.txt` (no fork
-  needed), **or** fork and change `REPO_RAW` at the top of `setup.sh`.
-- Everything installed uses neutral names (`terminal-welcome-*`, `00-welcome`),
-  so nothing is tied to this org except the default `message.txt` text and the
-  example branding — edit those to taste.
+- Fork the repo (so your hosts bootstrap `setup.sh` from your URL), then edit the
+  default [`message.txt`](message.txt) to taste.
+- Everything installed uses neutral names (`terminal-welcome-*`, `00-welcome`), so
+  nothing is tied to this org except the default `message.txt` text and the
+  example branding.
 - The default `message.txt` assumes a **NetBird `wt0`** interface and a **CasaOS**
-  dashboard (the `VPN IP` and `CasaOS` lines auto-hide where those are absent, but
+  dashboard (the `VPN IP` and `CasaOS` lines auto-hide where those are absent —
   swap in your own `{{IP_<IFACE>}}` / `{{URL_<IFACE>_PORT_<PORT>}}`).
-- Preview edits anywhere with `tools/preview.sh path/to/message.txt`, and stage on
-  one host first with `--url file://$PWD/message.txt` or `--branch my-edit`.
+- Preview edits anywhere with `tools/preview.sh path/to/message.txt`. Since each
+  host is independent, you can also just edit `/etc/terminal-welcome/message` on
+  one box to try something before rolling it into the default.
 
 ## Known edge cases
 
 - **`Last login:` line.** On SSH, `sshd` prints `Last login: …` above the banner
   (it's separate from the MOTD). Suppress per-user with `touch ~/.hushlogin`, or
   globally with `PrintLastLog no` in `/etc/ssh/sshd_config`.
-- **Text vs logic.** Editing `message.txt` propagates automatically. Changing the
-  renderer *logic* (new tokens, `setup.sh`) does **not** — re-run the installer on
-  each host (it's idempotent).
+- **Updating the engine.** Editing a host's `/etc/terminal-welcome/message` is
+  instant. Getting a newer *renderer* (new tokens, `setup.sh` fixes) means
+  re-running the installer on each host — it's idempotent and won't touch your
+  edited banner.
 - **Desktop terminals** are covered for `bash` only; shells inside `tmux`/`screen`
   don't repeat the banner, and `sudo -s` inside SSH can print it twice.
 - **Minimal installs** (Fedora/Arch without `iproute2`/`procps`) leave some tokens
@@ -223,8 +245,8 @@ The engine is generic. To run your own copy:
 
 | File | Role |
 |------|------|
-| `setup.sh` | installer / uninstaller; embeds the renderer, updater, shell snippet, timer/cron |
-| `message.txt` | the banner **template** — edit this to change what hosts show |
+| `setup.sh` | installer / uninstaller; embeds the renderer, the default banner, and the shell snippet |
+| `message.txt` | the **default** banner baked into `setup.sh` (hosts edit their own local copy) |
 | `examples/` | ready-to-use templates |
 | `tools/preview.sh` | render a template with sample data (preview before deploying) |
 | `tools/render-svg.py` | generate the README screenshots from a template |

@@ -15,13 +15,15 @@ jobs:
           set -euo pipefail
           shellcheck -s bash setup.sh tools/preview.sh
           awk '/cat > "\$RENDERER" <<.RENDER_EOF.$/{f=1;next} f&&/^RENDER_EOF$/{f=0} f' setup.sh > /tmp/render.bash
-          awk '/cat > "\$UPDATER" <<.UPD_EOF.$/{f=1;next} f&&/^UPD_EOF$/{f=0} f' setup.sh > /tmp/updater.sh
           awk '/cat > "\$PROFILE_SNIPPET" <<.EOF.$/{f=1;next} f&&/^EOF$/{f=0} f' setup.sh > /tmp/snip.sh
-          test -s /tmp/render.bash && test -s /tmp/updater.sh   # extraction actually found them
+          test -s /tmp/render.bash                                   # extraction actually found it
           shellcheck -s bash /tmp/render.bash
-          sh -n /tmp/updater.sh
           sh -n /tmp/snip.sh
           python3 -c "import ast; ast.parse(open('tools/render-svg.py').read())"
+          # The default banner embedded in setup.sh must match message.txt.
+          awk '/cat > "\$STATE" <<.MSG_EOF.$/{f=1;next} f&&/^MSG_EOF$/{f=0} f' setup.sh > /tmp/embedded-msg.txt
+          test -s /tmp/embedded-msg.txt
+          diff -q /tmp/embedded-msg.txt message.txt
           # Every template must use only known tokens (preview exits non-zero on unknowns).
           for f in message.txt examples/*.txt; do
             bash tools/preview.sh "$f" >/dev/null || { echo "unknown token in $f"; exit 1; }
@@ -40,40 +42,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up fakes (NetBird iface, listener, template server)
+      - name: Set up fakes (VPN iface, noise ifaces, a listener)
         run: |
           set -euo pipefail
           sudo ip link add wt0 type dummy
           sudo ip addr add 100.64.0.5/10 dev wt0
           sudo ip link set wt0 up
-          python3 -m http.server 8099 --bind 0.0.0.0 --directory "$PWD" &
-          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
-          for _ in $(seq 1 20); do curl -fsS http://127.0.0.1:8099/message.txt >/dev/null 2>&1 && break; sleep 0.5; done
+          # noise that must be filtered out of {{IP}}: docker-style bridge + global-scope link-local
+          sudo ip link add br-ci type dummy && sudo ip addr add 172.20.0.1/16 dev br-ci && sudo ip link set br-ci up
+          sudo ip link add lltest type dummy && sudo ip addr add 169.254.50.50/16 dev lltest scope global && sudo ip link set lltest up
+          # a listening port so {{PORTS}} has something to show
+          python3 -m http.server 8099 --bind 0.0.0.0 &
+          echo "PORTS_PID=$!" >> "$GITHUB_ENV"
 
-      - name: Install from the working tree
-        run: sudo bash setup.sh --url "http://127.0.0.1:8099/message.txt"
+      - name: Install from the working tree (local; no --url, no GitHub)
+        run: sudo bash setup.sh
 
-      - name: Assert install artifacts (renamed 00-welcome)
+      - name: Assert LOCAL install (renderer + seeded default, NO sync timer)
         run: |
           set -euo pipefail
           test -x /usr/local/sbin/terminal-welcome-render
-          test -x /usr/local/sbin/terminal-welcome-update
           test -x /etc/update-motd.d/00-welcome
           test ! -e /etc/update-motd.d/00-carlboms-welcome
-          systemctl is-enabled terminal-welcome.timer
+          test -s /etc/terminal-welcome/message                     # embedded default seeded
+          grep -q 'Copyright' /etc/terminal-welcome/message
           test -s /etc/terminal-welcome/disabled-motd.d
-          test -s /etc/terminal-welcome/message                     # fetch worked
+          test ! -e /usr/local/sbin/terminal-welcome-update         # no updater in local mode
+          test ! -e /etc/systemd/system/terminal-welcome.timer      # no sync timer
+          test ! -e /etc/cron.d/terminal-welcome                    # no cron
+          test ! -e /etc/terminal-welcome/welcome.conf              # no sync config
           if [ -e /etc/update-motd.d/10-help-text ]; then test ! -x /etc/update-motd.d/10-help-text; fi
 
-      - name: Assert engine renders (controlled template, independent of message.txt)
+      - name: Assert engine renders (controlled template)
         run: |
           set -euo pipefail
-          sudo systemctl stop terminal-welcome.timer 2>/dev/null || true
           sudo touch /var/run/reboot-required
           sudo tee /etc/terminal-welcome/message >/dev/null <<'TPL'
           {{CYAN}}hi{{RESET}} 🚀
            Host   : {{HOSTNAME}}
            VPN IP : {{VPNIP}}
+           AllIP  : {{IP}}
            IPWT0  : {{IP_WT0}}
            URL8   : {{URL_WT0_PORT_8080}}
            URL443 : {{URL_WT0_PORT_443}}
@@ -88,6 +96,9 @@ jobs:
           printf '%s'   "$out" | grep -q '🚀'                       # emoji preserved
           printf '%s\n' "$out" | grep -q 'Host   : '                # {{HOSTNAME}} resolved
           printf '%s\n' "$out" | grep -q 'VPN IP : 100.64.0.5'      # {{VPNIP}}
+          allip=$(printf '%s\n' "$out" | grep 'AllIP')
+          printf '%s\n' "$allip" | grep -q '100.64.0.5'             # wt0 kept in {{IP}}
+          if printf '%s\n' "$allip" | grep -qE '169\.254|br-ci'; then echo "noise iface leaked into {{IP}}"; exit 1; fi
           printf '%s\n' "$out" | grep -q 'IPWT0  : 100.64.0.5'      # {{IP_WT0}}
           printf '%s\n' "$out" | grep -q 'URL8   : http://100.64.0.5:8080'
           printf '%s\n' "$out" | grep -q 'URL443 : https://100.64.0.5'
@@ -96,14 +107,13 @@ jobs:
           if printf '%s\n' "$out" | grep -q 'Gone'; then echo "empty-value line not dropped"; exit 1; fi
           printf '%s\n' "$out" | grep -q 'System restart required'
 
-      - name: Re-run install is idempotent (ledger must survive)
+      - name: Re-running install preserves LOCAL edits (write-if-absent)
         run: |
           set -euo pipefail
-          before=$(cat /etc/terminal-welcome/disabled-motd.d)
-          sudo bash setup.sh --url "http://127.0.0.1:8099/message.txt"
-          after=$(cat /etc/terminal-welcome/disabled-motd.d)
-          test "$before" = "$after"                        # ledger not corrupted on re-run
-          if [ -e /etc/update-motd.d/10-help-text ]; then test ! -x /etc/update-motd.d/10-help-text; fi
+          echo 'MY-LOCAL-EDIT {{HOSTNAME}}' | sudo tee /etc/terminal-welcome/message >/dev/null
+          sudo bash setup.sh
+          grep -q 'MY-LOCAL-EDIT' /etc/terminal-welcome/message     # on-host edit NOT overwritten
+          test ! -e /etc/systemd/system/terminal-welcome.timer      # still no timer
 
       - name: Uninstall restores the box
         run: |
@@ -112,12 +122,11 @@ jobs:
           test ! -e /usr/local/sbin/terminal-welcome-render
           test ! -e /etc/update-motd.d/00-welcome
           test ! -e /etc/terminal-welcome
-          test ! -e /var/lib/terminal-welcome
           if [ -e /etc/update-motd.d/10-help-text ]; then test -x /etc/update-motd.d/10-help-text; fi
 
-      - name: Stop template server
+      - name: Stop listener
         if: always()
-        run: kill "${SERVER_PID:-0}" 2>/dev/null || true
+        run: kill "${PORTS_PID:-0}" 2>/dev/null || true
 
   cross-distro:
     runs-on: ubuntu-latest
@@ -133,18 +142,19 @@ jobs:
         run: |
           set -eu
           if command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y curl iproute2 procps gawk hostname sed grep coreutils >/dev/null
+            apt-get update -qq && apt-get install -y iproute2 procps gawk hostname sed grep coreutils >/dev/null
           elif command -v dnf >/dev/null; then
-            dnf install -y curl iproute procps-ng gawk hostname sed grep coreutils >/dev/null
+            dnf install -y iproute procps-ng gawk hostname sed grep coreutils >/dev/null
           elif command -v pacman >/dev/null; then
-            pacman -Sy --noconfirm --needed curl iproute2 procps-ng gawk inetutils sed grep coreutils >/dev/null
+            pacman -Sy --noconfirm --needed iproute2 procps-ng gawk inetutils sed grep coreutils >/dev/null
           fi
-      - name: Install from the working tree (root, no systemd -> cron/none path)
-        run: bash setup.sh --url "file://$PWD/message.txt"
-      - name: Assert the banner renders (controlled template)
+      - name: Install from the working tree (local; no GitHub)
+        run: bash setup.sh
+      - name: Assert seeded default + engine renders (controlled template)
         run: |
           set -eu
-          test -s /etc/terminal-welcome/message                     # fetch worked
+          test -s /etc/terminal-welcome/message                     # embedded default seeded
+          grep -q 'Copyright' /etc/terminal-welcome/message
           printf 'MARKER-OK host={{HOSTNAME}}\n Section:\n' > /etc/terminal-welcome/message
           out=$(/usr/local/sbin/terminal-welcome-render); echo "$out"
           printf '%s\n' "$out" | grep -q 'MARKER-OK host='          # engine renders a token

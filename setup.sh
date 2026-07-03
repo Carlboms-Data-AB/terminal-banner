@@ -2,25 +2,22 @@
 #
 # setup.sh - install a custom, dynamic terminal welcome message (MOTD) on Linux.
 #
-# The banner is a TEMPLATE (message.txt) with {{TOKENS}} that each host fills in
-# LOCALLY at display time, plus {{COLOUR}} tokens for styling. Cheap values are
-# computed at every login; expensive/network values (public IP, update counts)
-# are cached by the periodic sync job so login stays instant and offline-safe.
+# Fully LOCAL: the install bootstraps from GitHub (this script), but AFTER that
+# nothing is ever fetched again. The banner lives in /etc/terminal-welcome/message
+# on the host - a TEMPLATE with {{TOKENS}} that the renderer fills in with this
+# host's live values at display time, plus {{COLOUR}} tokens for styling. Edit
+# that file on the box and the change is immediate; re-running this installer
+# never overwrites it.
 #
-# Only the template TEXT is fetched from GitHub - never executable code. The
-# renderer is installed once, pinned, and treats the template as DATA (string
+# The renderer is installed once and treats the template as DATA (string
 # substitution, no eval), stripping the ESC control byte so ANSI/OSC escape
 # sequences can't render. See README for the token catalogue and security model.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-welcome-message/main/setup.sh | sudo bash
-#   curl -fsSL .../setup.sh | sudo bash -s -- --interval 10
 #   curl -fsSL .../setup.sh | sudo bash -s -- --uninstall
 #
 # Options:
-#   --interval MINUTES   how often to re-sync the template (default 15, range 1-59)
-#   --branch NAME        git branch to fetch message.txt from (default main)
-#   --url URL            fetch the template from a custom URL (self-host / testing)
 #   --uninstall          remove everything and restore the box
 #   -h, --help           show this header
 #
@@ -28,18 +25,16 @@ set -euo pipefail
 
 # ---- Configuration ----------------------------------------------------------
 
-REPO_RAW="https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-welcome-message"
-BRANCH="main"
-INTERVAL=15
+REPO_RAW="https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-welcome-message/main"  # docs/uninstall link only; never fetched after install
 DO_UNINSTALL=false
-MESSAGE_URL_OVERRIDE=""
 
 CONF_DIR=/etc/terminal-welcome
-CONF_FILE="$CONF_DIR/welcome.conf"
-CACHE_DIR=/var/lib/terminal-welcome        # cached (network/slow) token values
+CONF_FILE="$CONF_DIR/welcome.conf"         # legacy synced-install config - removed on install
+CACHE_DIR=/var/lib/terminal-welcome        # optional cache for {{PUBIP}}/{{UPDATES}}
+STATE="$CONF_DIR/message"                  # the LOCAL template - edit this on the host
 MOTD_BACKUP="$CONF_DIR/motd.orig"
 DISABLED_LIST="$CONF_DIR/disabled-motd.d"
-UPDATER=/usr/local/sbin/terminal-welcome-update
+UPDATER=/usr/local/sbin/terminal-welcome-update   # legacy sync job - removed on install
 RENDERER=/usr/local/sbin/terminal-welcome-render
 MOTDD_SCRIPT=/etc/update-motd.d/00-welcome
 MOTDD_LEGACY=/etc/update-motd.d/00-carlboms-welcome   # pre-rename installs
@@ -54,15 +49,12 @@ HOOK_MARK="# >>> terminal-welcome hook >>>"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --interval) INTERVAL="${2:?--interval needs a number}"; shift ;;
-        --branch)   BRANCH="${2:?--branch needs a name}"; shift ;;
-        --url)      MESSAGE_URL_OVERRIDE="${2:?--url needs a URL}"; shift ;;
         --uninstall) DO_UNINSTALL=true ;;
         -h|--help)
             if [[ -r "$0" && "$0" != bash && "$0" != -bash && "$0" != sh ]]; then
                 grep '^#' "$0" | sed 's/^# \{0,1\}//'
             else
-                echo "terminal-welcome-message — options: --interval MIN | --branch NAME | --url URL | --uninstall"
+                echo "terminal-welcome-message — options: --uninstall | -h"
                 echo "docs: https://github.com/Carlboms-Data-AB/terminal-welcome-message"
             fi
             exit 0 ;;
@@ -71,11 +63,8 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-[[ "$INTERVAL" =~ ^[0-9]+$ && "$INTERVAL" -ge 1 && "$INTERVAL" -le 59 ]] \
-    || { echo "ERROR: --interval must be an integer 1..59 (minutes)" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "ERROR: run as root (sudo $0)" >&2; exit 1; }
 
-MESSAGE_URL="${MESSAGE_URL_OVERRIDE:-$REPO_RAW/$BRANCH/message.txt}"
 has_systemd() { [[ -d /run/systemd/system ]]; }
 use_update_motd_d() { [[ -d /etc/update-motd.d ]]; }
 
@@ -120,8 +109,14 @@ for c in ip ss awk sed; do command -v "$c" >/dev/null 2>&1 || missing="$missing 
 [[ -n "$missing" ]] && echo "NOTE: missing tools (some tokens will be blank):$missing" \
     "- install iproute2 / procps / coreutils / gawk for full output." >&2
 
-echo "Installing terminal-welcome (sync every ${INTERVAL} min from $MESSAGE_URL) ..."
+echo "Installing terminal-welcome (local; no GitHub sync) ..."
 mkdir -p "$CONF_DIR" "$CACHE_DIR"
+
+# Migrate any older 'GitHub-synced' install to local-only: stop and remove the
+# sync timer/cron/updater and its config so nothing is ever fetched again.
+if has_systemd; then systemctl disable --now terminal-welcome.timer 2>/dev/null || true; fi
+rm -f "$TIMER" "$SVC" "$CRON" "$UPDATER" "$CONF_FILE"
+has_systemd && { systemctl daemon-reload 2>/dev/null || true; }
 
 # Back up the existing /etc/motd once (records a symlink as text; copies a real file).
 if [[ ! -e "$MOTD_BACKUP" ]]; then
@@ -130,12 +125,26 @@ if [[ ! -e "$MOTD_BACKUP" ]]; then
     else : > "$MOTD_BACKUP"; fi
 fi
 
-cat > "$CONF_FILE" <<EOF
-# terminal-welcome configuration - managed by setup.sh, safe to edit.
-MESSAGE_URL="$MESSAGE_URL"
-RENDER_TO_MOTD=$RENDER_TO_MOTD
-EOF
-chmod 0644 "$CONF_FILE"
+# Seed the LOCAL template with a default ONLY if this host has none yet, so
+# re-running the installer never clobbers edits you've made on the box.
+if [[ ! -e "$STATE" ]]; then
+    cat > "$STATE" <<'MSG_EOF'
+Copyright Carlboms Data AB
+----------------------------------------
+ Host    : {{HOSTNAME}}
+ OS      : {{OS}}
+ IP      : {{IP}}
+ VPN IP  : {{VPNIP}}
+ CasaOS  : {{URL_WT0_PORT_80}}
+ Uptime  : {{UPTIME}}
+ Load    : {{LOAD1}} {{LOAD5}} {{LOAD15}}
+ Disk /  : {{DISK}}
+ Memory  : {{MEM}}
+ Ports   : {{PORTS}}
+ {{REBOOT}}
+MSG_EOF
+fi
+chmod 0644 "$STATE"
 
 # ---- Renderer: read the local template, substitute this host's live values,
 #      read cached values for network/slow tokens, print. The template is never
@@ -146,7 +155,7 @@ cat > "$RENDERER" <<'RENDER_EOF'
 set -u
 STATE=/etc/terminal-welcome/message
 CACHE=/var/lib/terminal-welcome
-[ -r "$STATE" ] || { echo "(no welcome template yet - run terminal-welcome-update)" >&2; exit 0; }
+[ -r "$STATE" ] || { echo "(no welcome template yet - re-run setup.sh)" >&2; exit 0; }
 tpl=$(cat "$STATE")
 
 # -- identity --
@@ -221,7 +230,7 @@ disk_total=$(printf '%s' "$dfl" | awk '{print $2}')
 
 # -- network (one route lookup) --
 route=$(ip -o route get 1.1.1.1 2>/dev/null)
-ips=$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/");printf "%s%s (%s)",(NR>1?", ":""),a[1],$2}')
+ips=$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/");ip=a[1];ifc=$2;if(ifc~/^(lo|veth|br-|docker|virbr|cni|flannel|cali|tap)/)next;if(ip~/^169\.254\./)next;printf "%s%s (%s)",(n++?", ":""),ip,ifc}')
 ip4=$(printf '%s' "$route" | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}')
 ipv6=$(ip -6 -o addr show scope global 2>/dev/null | awk '$0!~/temporary/{split($4,a,"/");print a[1];exit}')
 [ -n "$ipv6" ] || ipv6=$(ip -6 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/");print a[1];exit}')
@@ -266,7 +275,7 @@ elif command -v needs-restarting >/dev/null 2>&1 && ! timeout 3 needs-restarting
   reboot='{{RED}}*** System restart required ***{{RESET}}'
 fi
 
-# -- cached (written by terminal-welcome-update on the timer) --
+# -- cached (optional): {{PUBIP}}/{{UPDATES}}, empty unless you enable a refresh cron (see README) --
 pubip=$(cat "$CACHE/pubip" 2>/dev/null)
 updates=$(cat "$CACHE/updates" 2>/dev/null)
 
@@ -353,64 +362,9 @@ printf '%s%s\n' "$out" "$c_reset"
 RENDER_EOF
 chmod 0755 "$RENDERER"; chown root:root "$RENDERER"
 
-# ---- Updater: sync the template (DATA only) and refresh cached token values.
-cat > "$UPDATER" <<'UPD_EOF'
-#!/bin/sh
-# terminal-welcome-update - sync the welcome template from GitHub (DATA only)
-# and refresh cached (network/slow) token values. Fails safe when offline.
-set -eu
-CONF=/etc/terminal-welcome/welcome.conf
-[ -r "$CONF" ] && . "$CONF"
-: "${MESSAGE_URL:?MESSAGE_URL not set in $CONF}"
-STATE=/etc/terminal-welcome/message
-CACHE=/var/lib/terminal-welcome
-RENDERER=/usr/local/sbin/terminal-welcome-render
-mkdir -p "$CACHE"
-
-# 1) Fetch the template text (best-effort; keep the last one on failure).
-tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --max-time 15 --retry 2 "$MESSAGE_URL" -o "$tmp" 2>/dev/null && fetched=1 || fetched=0
-elif command -v wget >/dev/null 2>&1; then
-    wget -q -T 15 -t 2 -O "$tmp" "$MESSAGE_URL" && fetched=1 || fetched=0
-else
-    echo "terminal-welcome-update: need curl or wget" >&2; fetched=0
-fi
-if [ "$fetched" = 1 ]; then
-    clean=$(LC_ALL=C tr -cd '\11\12\40-\176\200-\377' < "$tmp")
-    printf '%s\n' "$clean" > "$STATE.new" && mv -f "$STATE.new" "$STATE"; chmod 0644 "$STATE"
-fi
-
-# 2) Refresh cached token values (never abort the updater on failure).
-refresh_cache() {
-    # Public IP (short timeout; only accept a bare IPv4).
-    p=$(curl -fs --max-time 4 https://api.ipify.org 2>/dev/null \
-        || wget -qO- -T 4 https://api.ipify.org 2>/dev/null || true)
-    case "$p" in ''|*[!0-9.]*) : ;; *) printf '%s' "$p" > "$CACHE/pubip.new" && mv -f "$CACHE/pubip.new" "$CACHE/pubip" ;; esac
-
-    # Pending update count (uses local package lists; count via awk so it never exits non-zero).
-    u=''
-    if [ -x /usr/lib/update-notifier/apt-check ]; then
-        u=$(/usr/lib/update-notifier/apt-check 2>&1 | cut -d';' -f1)
-    elif command -v apt-get >/dev/null 2>&1; then
-        u=$(apt-get -s upgrade 2>/dev/null | awk '/^Inst/{c++}END{print c+0}')
-    elif command -v dnf >/dev/null 2>&1; then
-        u=$(dnf -q --cacheonly list --upgrades 2>/dev/null | awk 'NR>1{c++}END{print c+0}')
-    elif command -v checkupdates >/dev/null 2>&1; then
-        u=$(checkupdates 2>/dev/null | awk 'END{print NR+0}')
-    fi
-    case "$u" in ''|0) : > "$CACHE/updates" ;; *) printf '%s updates' "$u" > "$CACHE/updates" ;; esac
-}
-refresh_cache 2>/dev/null || true
-
-# 3) On non-update-motd.d hosts, (re)render /etc/motd from the LOCAL template -
-#    ALWAYS, even when offline, so dynamic values stay fresh each tick.
-if [ "${RENDER_TO_MOTD:-false}" = "true" ] && [ -x "$RENDERER" ] && [ -r "$STATE" ]; then
-    [ -L /etc/motd ] && rm -f /etc/motd
-    "$RENDERER" > /etc/motd.new 2>/dev/null && mv -f /etc/motd.new /etc/motd && chmod 0644 /etc/motd
-fi
-UPD_EOF
-chmod 0755 "$UPDATER"; chown root:root "$UPDATER"
+# ---- No updater / sync job in local mode: nothing is fetched after install.
+#      {{PUBIP}}/{{UPDATES}} are optional and refreshed only if you add the cron
+#      shown in the README. Any legacy sync artifacts are removed above on install.
 
 # ---- GUI terminal windows: render live from the shell (pam_motd never runs
 #      there). Guarded so it does not double-print on SSH / console logins.
@@ -458,58 +412,23 @@ if use_update_motd_d; then
     : > /etc/motd
 fi
 
-# ---- Scheduling: systemd timer, else cron, else a warning (still renders once).
-SCHED_DESC=""
-if has_systemd; then
-    rm -f "$CRON"
-    cat > "$SVC" <<EOF
-[Unit]
-Description=Sync terminal welcome template from GitHub
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=$UPDATER
-EOF
-    cat > "$TIMER" <<EOF
-[Unit]
-Description=Periodically sync the terminal welcome template
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=${INTERVAL}min
-RandomizedDelaySec=60
-
-[Install]
-WantedBy=timers.target
-EOF
-    systemctl daemon-reload
-    systemctl enable --now terminal-welcome.timer
-    SCHED_DESC="systemd timer (every ${INTERVAL} min, +boot, jittered)"
-elif command -v crontab >/dev/null 2>&1 || [[ -d /etc/cron.d ]] || mkdir -p /etc/cron.d 2>/dev/null; then
-    rm -f "$SVC" "$TIMER"
-    cat > "$CRON" <<EOF
-# terminal-welcome - sync the welcome template every ${INTERVAL} min
-*/${INTERVAL} * * * * root $UPDATER >/dev/null 2>&1
-EOF
-    chmod 0644 "$CRON"
-    SCHED_DESC="cron (every ${INTERVAL} min)"
-else
-    SCHED_DESC="none - no systemd or cron; re-run setup.sh or 'terminal-welcome-update' to refresh"
-    echo "WARNING: no scheduler found; the banner will not auto-update. $SCHED_DESC" >&2
+# ---- Non-update-motd.d hosts (Fedora/RHEL/Arch): render the banner onto
+#      /etc/motd now. It's a point-in-time snapshot there; live values still
+#      show via the shell snippet in interactive terminals. update-motd.d hosts
+#      (Debian/Ubuntu/RPi OS) render live at each login - no background job.
+if [[ "$RENDER_TO_MOTD" == true ]]; then
+    [[ -L /etc/motd ]] && rm -f /etc/motd
+    "$RENDERER" > /etc/motd 2>/dev/null || true
+    chmod 0644 /etc/motd 2>/dev/null || true
 fi
 
-# First sync + render now so the banner is live immediately.
-"$UPDATER" || echo "WARNING: initial fetch failed - will retry on schedule." >&2
-
 echo
-echo "Installed. Banner is live."
-echo "  Render   : $( use_update_motd_d && echo 'at each login via /etc/update-motd.d (always fresh)' || echo 'onto /etc/motd on the timer' )"
-echo "  Schedule : $SCHED_DESC"
-echo "  Template : edit message.txt in the repo; hosts pick it up on the timer"
+echo "Installed. Banner is live — fully local, no GitHub sync."
+echo "  Render   : $( use_update_motd_d && echo 'live at each login (/etc/update-motd.d)' || echo 'onto /etc/motd now (snapshot on this distro; live in interactive shells)' )"
+echo "  Edit     : sudo nano $STATE"
+echo "             (takes effect immediately; re-running setup.sh won't overwrite it)"
 echo "  Preview  : sudo $RENDERER"
-echo "  Uninstall: curl -fsSL $REPO_RAW/$BRANCH/setup.sh | sudo bash -s -- --uninstall"
+echo "  Uninstall: curl -fsSL $REPO_RAW/setup.sh | sudo bash -s -- --uninstall"
 echo
 echo "Current banner on this host:"
 echo "----------------------------------------"
