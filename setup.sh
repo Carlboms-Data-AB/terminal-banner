@@ -89,7 +89,8 @@ uninstall_body() {
 remove_sync() {
     if has_systemd; then systemctl disable --now terminal-welcome.timer 2>/dev/null || true; fi
     rm -f "$TIMER" "$SVC" "$CRON" "$UPDATER" "$CONF_FILE"
-    has_systemd && { systemctl daemon-reload 2>/dev/null || true; }
+    if has_systemd; then systemctl daemon-reload 2>/dev/null || true; fi
+    return 0
 }
 
 install_sync() {
