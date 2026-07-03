@@ -67,7 +67,7 @@ jobs:
           test -x /etc/update-motd.d/00-welcome
           test ! -e /etc/update-motd.d/00-carlboms-welcome
           test -s /etc/terminal-banner/message                     # embedded default seeded
-          grep -q 'Copyright' /etc/terminal-banner/message
+          grep -q 'CARLBOMS' /etc/terminal-banner/message
           test -s /etc/terminal-banner/disabled-motd.d
           test -x /usr/local/sbin/terminal-banner-uninstall        # local uninstaller present
           test -x /usr/local/sbin/terminal-banner                  # local menu launcher present
@@ -159,7 +159,7 @@ jobs:
         run: |
           set -eu
           test -s /etc/terminal-banner/message                     # embedded default seeded
-          grep -q 'Copyright' /etc/terminal-banner/message
+          grep -q 'CARLBOMS' /etc/terminal-banner/message
           printf 'MARKER-OK host={{HOSTNAME}}\n Section:\n' > /etc/terminal-banner/message
           out=$(/usr/local/sbin/terminal-banner-render); echo "$out"
           printf '%s\n' "$out" | grep -q 'MARKER-OK host='          # engine renders a token
@@ -199,7 +199,7 @@ jobs:
           systemctl is-enabled terminal-banner.timer               # timer enabled
           test -s /etc/terminal-banner/welcome.conf
           grep -q '127.0.0.1:8099' /etc/terminal-banner/welcome.conf
-          grep -q 'Copyright' /etc/terminal-banner/message         # fetched the served message.txt
+          grep -q 'CARLBOMS' /etc/terminal-banner/message         # fetched the served message.txt
       - name: Switching to local turns sync OFF
         run: |
           set -euo pipefail
