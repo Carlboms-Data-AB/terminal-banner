@@ -29,6 +29,7 @@
 # Options:
 #   --interval MINUTES   how often to re-sync the template (default 15, range 1-59)
 #   --branch NAME        git branch to fetch message.txt from (default main)
+#   --url URL            fetch the template from a custom URL (self-host / testing)
 #   --uninstall          remove everything and restore the box
 #   -h, --help           show this header
 #
@@ -40,6 +41,7 @@ REPO_RAW="https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-welcome-me
 BRANCH="main"
 INTERVAL=15
 DO_UNINSTALL=false
+MESSAGE_URL_OVERRIDE=""
 
 CONF_DIR=/etc/terminal-welcome
 CONF_FILE="$CONF_DIR/welcome.conf"
@@ -61,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --interval) INTERVAL="${2:?--interval needs a number}"; shift ;;
         --branch)   BRANCH="${2:?--branch needs a name}"; shift ;;
+        --url)      MESSAGE_URL_OVERRIDE="${2:?--url needs a URL}"; shift ;;
         --uninstall) DO_UNINSTALL=true ;;
         -h|--help)  grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -72,7 +75,7 @@ done
     || { echo "ERROR: --interval must be an integer 1..59 (minutes)" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "ERROR: run as root (sudo $0)" >&2; exit 1; }
 
-MESSAGE_URL="$REPO_RAW/$BRANCH/message.txt"
+MESSAGE_URL="${MESSAGE_URL_OVERRIDE:-$REPO_RAW/$BRANCH/message.txt}"
 has_systemd() { [[ -d /run/systemd/system ]]; }
 # Debian/Ubuntu render at login via update-motd.d; others render onto /etc/motd.
 use_update_motd_d() { [[ -d /etc/update-motd.d ]]; }
@@ -137,7 +140,7 @@ STATE=/etc/terminal-welcome/message
 [ -r "$STATE" ] || exit 0
 tpl=$(cat "$STATE")
 
-host=$(hostname 2>/dev/null || echo '?')
+host=$(hostname 2>/dev/null || cat /proc/sys/kernel/hostname 2>/dev/null || echo '?')
 
 # All global IPv4 with interface, e.g. "81.88.19.36 (ens3), 100.91.68.49 (wt0)".
 ips=$(ip -4 -o addr show scope global 2>/dev/null \
@@ -176,7 +179,7 @@ if [ -f /etc/casaos/gateway.ini ] || command -v casaos >/dev/null 2>&1; then
 fi
 
 if [ -f /run/reboot-required ] || [ -f /var/run/reboot-required ]; then
-    reboot='*** System restart required ***'
+    reboot='{{RED}}*** System restart required ***{{RESET}}'
 else
     reboot=''
 fi
@@ -193,11 +196,28 @@ out=${out//'{{PORTS}}'/$ports}
 out=${out//'{{CASAOS}}'/$casaos}
 out=${out//'{{REBOOT}}'/$reboot}
 
-# Drop optional lines whose value came out empty ("Label : " with nothing after
-# the colon) and any all-blank lines, then strip stray control/escape bytes.
-printf '%s\n' "$out" \
-    | sed -E '/:[[:space:]]*$/d; /^[[:space:]]*$/d' \
-    | LC_ALL=C tr -cd '\11\12\40-\176\200-\377'
+# Drop lines that are effectively empty — whitespace-only, or "Label : " with an
+# empty value — even when they still carry colour tokens. Then strip stray bytes.
+out=$(printf '%s\n' "$out" | awk '
+    { p=$0; gsub(/\{\{(RESET|BOLD|DIM|RED|GREEN|YELLOW|BLUE|MAGENTA|CYAN|WHITE)\}\}/,"",p)
+      if (p ~ /^[[:space:]]*$/) next
+      if (p ~ /:[[:space:]]*$/)  next
+      print }' | LC_ALL=C tr -cd '\11\12\40-\176\200-\377')
+
+# Colour markup for ASCII art: this LOCAL, trusted renderer turns safe {{COLOR}}
+# tokens into SGR escapes AFTER sanitising — so no escape sequence ever travels
+# from the template/GitHub. A reset is always appended so the terminal restores.
+e=$(printf '\033')
+c_reset="${e}[0m";  c_bold="${e}[1m";    c_dim="${e}[2m"
+c_red="${e}[31m";   c_green="${e}[32m";  c_yellow="${e}[33m"
+c_blue="${e}[34m";  c_magenta="${e}[35m"; c_cyan="${e}[36m"; c_white="${e}[37m"
+out=${out//'{{RESET}}'/$c_reset};     out=${out//'{{BOLD}}'/$c_bold}
+out=${out//'{{DIM}}'/$c_dim}
+out=${out//'{{RED}}'/$c_red};         out=${out//'{{GREEN}}'/$c_green}
+out=${out//'{{YELLOW}}'/$c_yellow};   out=${out//'{{BLUE}}'/$c_blue}
+out=${out//'{{MAGENTA}}'/$c_magenta}; out=${out//'{{CYAN}}'/$c_cyan}
+out=${out//'{{WHITE}}'/$c_white}
+printf '%s%s\n' "$out" "$c_reset"
 EOF
 chmod 0755 "$RENDERER"; chown root:root "$RENDERER"
 

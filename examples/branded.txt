@@ -1,0 +1,8 @@
+{{CYAN}}========================================{{RESET}}
+   {{BOLD}}Carlboms Data AB{{RESET}}  {{DIM}}// homelab{{RESET}}
+{{CYAN}}========================================{{RESET}}
+ Host    : {{HOSTNAME}}
+ VPN IP  : {{GREEN}}{{VPNIP}}{{RESET}}
+ CasaOS  : {{CYAN}}{{CASAOS}}{{RESET}}
+ Ports   : {{PORTS}}
+ {{REBOOT}}

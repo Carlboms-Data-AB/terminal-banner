@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck setup.sh and embedded scripts
+        run: |
+          set -euo pipefail
+          shellcheck -s bash setup.sh
+          awk '/cat > "\$RENDERER" <<.EOF.$/{f=1;next} f&&/^EOF$/{f=0} f' setup.sh > /tmp/render.bash
+          awk '/cat > "\$UPDATER" <<.EOF.$/{f=1;next} f&&/^EOF$/{f=0} f' setup.sh > /tmp/updater.sh
+          awk '/cat > "\$PROFILE_SNIPPET" <<.EOF.$/{f=1;next} f&&/^EOF$/{f=0} f' setup.sh > /tmp/snip.sh
+          shellcheck -s bash /tmp/render.bash
+          sh -n /tmp/updater.sh
+          sh -n /tmp/snip.sh
+          echo "lint OK"
+
+  integration-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up fakes (NetBird iface, listener, CasaOS, local template server)
+        run: |
+          set -euo pipefail
+          # Fake NetBird interface so {{VPNIP}} and the CasaOS URL are deterministic.
+          sudo ip link add netbird0 type dummy
+          sudo ip addr add 100.64.0.5/10 dev netbird0
+          sudo ip link set netbird0 up
+          # A real off-box listener so {{PORTS}} has something to show (port 8099),
+          # which also serves message.txt to the installer over HTTP.
+          python3 -m http.server 8099 --bind 0.0.0.0 --directory "$PWD" &
+          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+          # Fake CasaOS config with a non-default port.
+          sudo mkdir -p /etc/casaos
+          printf '[gateway]\nport = 81\n' | sudo tee /etc/casaos/gateway.ini >/dev/null
+          for _ in $(seq 1 20); do
+            curl -fsS "http://127.0.0.1:8099/message.txt" >/dev/null 2>&1 && break; sleep 0.5
+          done
+
+      - name: Install from the working tree
+        run: sudo bash setup.sh --url "http://127.0.0.1:8099/message.txt"
+
+      - name: Assert install artifacts
+        run: |
+          set -euo pipefail
+          test -x /usr/local/sbin/terminal-welcome-render
+          test -x /usr/local/sbin/terminal-welcome-update
+          test -x /etc/update-motd.d/00-carlboms-welcome
+          systemctl is-enabled terminal-welcome.timer
+          # Stock banner scripts must have been disabled.
+          if [ -e /etc/update-motd.d/10-help-text ]; then test ! -x /etc/update-motd.d/10-help-text; fi
+
+      - name: Assert rendered content (dynamic tokens)
+        run: |
+          set -euo pipefail
+          out=$(sudo /usr/local/sbin/terminal-welcome-render); echo "$out"
+          grep -q 'Copyright Carlboms Data AB' <<<"$out"
+          grep -q 'Host    :'                  <<<"$out"
+          grep -Eq 'VPN IP  : 100\.64\.0\.5'   <<<"$out"
+          grep -q '8099'                       <<<"$out"   # listening port
+          grep -q 'http://100.64.0.5:81'       <<<"$out"   # CasaOS URL via VPN IP
+
+      - name: Assert update-motd.d renders at login
+        run: sudo run-parts --lsbsysinit /etc/update-motd.d | grep -q 'Copyright Carlboms Data AB'
+
+      - name: Assert reboot-required line appears
+        run: |
+          set -euo pipefail
+          sudo touch /var/run/reboot-required
+          sudo /usr/local/sbin/terminal-welcome-render | grep -q 'System restart required'
+
+      - name: Assert colour + emoji rendering
+        run: |
+          set -euo pipefail
+          sudo systemctl stop terminal-welcome.timer 2>/dev/null || true  # avoid a mid-test re-sync
+          sudo tee /etc/terminal-welcome/message >/dev/null <<'TPL'
+          {{CYAN}}hi{{RESET}} 🚀 {{BOLD}}bold{{RESET}}
+           Host : {{HOSTNAME}}
+          TPL
+          out=$(sudo /usr/local/sbin/terminal-welcome-render)
+          esc=$(printf '\033')
+          case "$out" in *"$esc"*) : ;; *) echo "no colour ESC emitted"; exit 1 ;; esac
+          printf '%s' "$out" | grep -q '🚀'                  # emoji preserved
+          if printf '%s' "$out" | grep -q '{{'; then echo "leftover tokens"; exit 1; fi
+
+      - name: Uninstall restores the box
+        run: |
+          set -euo pipefail
+          sudo bash setup.sh --uninstall
+          test ! -e /usr/local/sbin/terminal-welcome-render
+          test ! -e /etc/update-motd.d/00-carlboms-welcome
+          test ! -e /etc/terminal-welcome
+          if [ -e /etc/update-motd.d/10-help-text ]; then test -x /etc/update-motd.d/10-help-text; fi
+
+      - name: Stop template server
+        if: always()
+        run: kill "${SERVER_PID:-0}" 2>/dev/null || true
+
+  cross-distro:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:stable, fedora:latest, archlinux:latest]
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -eu
+          if command -v apt-get >/dev/null; then
+            apt-get update -qq
+            apt-get install -y curl iproute2 procps gawk hostname sed grep coreutils >/dev/null
+          elif command -v dnf >/dev/null; then
+            dnf install -y curl iproute procps-ng gawk hostname sed grep coreutils >/dev/null
+          elif command -v pacman >/dev/null; then
+            pacman -Sy --noconfirm --needed curl iproute2 procps-ng gawk inetutils sed grep coreutils >/dev/null
+          fi
+
+      - name: Install from the working tree (root in container, no systemd)
+        run: bash setup.sh --url "file://$PWD/message.txt"
+
+      - name: Assert the banner renders
+        run: |
+          set -eu
+          out=$(/usr/local/sbin/terminal-welcome-render); echo "$out"
+          grep -q 'Copyright Carlboms Data AB' <<<"$out"
+          grep -q 'Host    :'                  <<<"$out"
+
+      - name: Assert colour + emoji rendering
+        run: |
+          set -eu
+          cat > /etc/terminal-welcome/message <<'TPL'
+          {{GREEN}}ok{{RESET}} ✅ {{HOSTNAME}}
+          TPL
+          out=$(/usr/local/sbin/terminal-welcome-render)
+          esc=$(printf '\033')
+          case "$out" in *"$esc"*) : ;; *) echo "no colour ESC emitted"; exit 1 ;; esac
+          printf '%s' "$out" | grep -q '✅'
+          if printf '%s' "$out" | grep -q '{{'; then echo "leftover tokens"; exit 1; fi
+
+      - name: Uninstall
+        run: |
+          set -eu
+          bash setup.sh --uninstall
+          test ! -e /etc/terminal-welcome

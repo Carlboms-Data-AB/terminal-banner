@@ -1,0 +1,11 @@
+{{CYAN}} ______________________ {{RESET}}
+{{CYAN}}|  __________________  |{{RESET}}
+{{CYAN}}| |                  | |{{RESET}}
+{{CYAN}}| |  {{GREEN}}> Carlboms Data{{CYAN}} | |{{RESET}}
+{{CYAN}}| |__________________| |{{RESET}}
+{{CYAN}}|______________________|{{RESET}}
+{{CYAN}}    \____________/      {{RESET}}
+ Host   : {{HOSTNAME}}
+ VPN IP : {{VPNIP}}
+ Uptime : {{UPTIME}}
+ {{REBOOT}}

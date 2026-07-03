@@ -1,0 +1,4 @@
+{{BOLD}}{{CYAN}}Copyright Carlboms Data AB{{RESET}}
+ Host : {{HOSTNAME}}
+ IP   : {{IP}}
+ {{REBOOT}}
