@@ -19,6 +19,8 @@ jobs:
           test -s /tmp/render.bash                                   # extraction actually found it
           shellcheck -s bash /tmp/render.bash
           sh -n /tmp/snip.sh
+          awk '/cat > "\$UPDATER" <<.UPD_EOF.$/{f=1;next} f&&/^UPD_EOF$/{f=0} f' setup.sh > /tmp/updater.sh
+          test -s /tmp/updater.sh && sh -n /tmp/updater.sh
           python3 -c "import ast; ast.parse(open('tools/render-svg.py').read())"
           # The default banner embedded in setup.sh must match message.txt.
           awk '/cat > "\$STATE" <<.MSG_EOF.$/{f=1;next} f&&/^MSG_EOF$/{f=0} f' setup.sh > /tmp/embedded-msg.txt
@@ -178,3 +180,35 @@ jobs:
           /usr/local/sbin/terminal-welcome-uninstall
           test ! -e /etc/terminal-welcome
           test ! -e /usr/local/sbin/terminal-welcome
+
+  integration-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Serve a template + install WITH GitHub sync (env-driven, non-interactive)
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8099 --bind 127.0.0.1 &
+          echo "PID=$!" >> "$GITHUB_ENV"
+          for _ in $(seq 1 20); do curl -fsS http://127.0.0.1:8099/message.txt >/dev/null 2>&1 && break; sleep 0.5; done
+          sudo env TW_SYNC=1 TW_SYNC_URL=http://127.0.0.1:8099/message.txt bash setup.sh
+      - name: Assert sync is ON and it fetched the served banner
+        run: |
+          set -euo pipefail
+          test -x /usr/local/sbin/terminal-welcome-update           # updater installed
+          systemctl is-enabled terminal-welcome.timer               # timer enabled
+          test -s /etc/terminal-welcome/welcome.conf
+          grep -q '127.0.0.1:8099' /etc/terminal-welcome/welcome.conf
+          grep -q 'Copyright' /etc/terminal-welcome/message         # fetched the served message.txt
+      - name: Switching to local turns sync OFF
+        run: |
+          set -euo pipefail
+          sudo bash setup.sh                                        # no tty, no TW_SYNC -> local
+          test ! -e /etc/systemd/system/terminal-welcome.timer
+          test ! -e /usr/local/sbin/terminal-welcome-update
+          test ! -e /etc/terminal-welcome/welcome.conf
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo /usr/local/sbin/terminal-welcome-uninstall 2>/dev/null || true
+          kill "${PID:-0}" 2>/dev/null || true

@@ -45,6 +45,12 @@ TIMER=/etc/systemd/system/terminal-welcome.timer
 CRON=/etc/cron.d/terminal-welcome
 HOOK_MARK="# >>> terminal-welcome hook >>>"
 
+# GitHub-sync mode (optional, chosen from the menu): pull the banner from the repo
+# on a timer. Local mode (the default) never touches these.
+REPO_RAW="https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-welcome-message/main"
+SYNC_URL="${TW_SYNC_URL:-$REPO_RAW/message.txt}"
+SYNC_INTERVAL=15
+
 [[ $EUID -eq 0 ]] || { echo "ERROR: run as root (sudo bash setup.sh)" >&2; exit 1; }
 
 has_systemd() { [[ -d /run/systemd/system ]]; }
@@ -77,9 +83,93 @@ uninstall_body() {
     rm -rf "$CONF_DIR" "$CACHE_DIR"
     echo "Done."
 }
+
+# ---- GitHub sync (optional; chosen from the menu) ---------------------------
+
+remove_sync() {
+    if has_systemd; then systemctl disable --now terminal-welcome.timer 2>/dev/null || true; fi
+    rm -f "$TIMER" "$SVC" "$CRON" "$UPDATER" "$CONF_FILE"
+    has_systemd && { systemctl daemon-reload 2>/dev/null || true; }
+}
+
+install_sync() {
+    cat > "$CONF_FILE" <<EOF
+# terminal-welcome sync config - managed by the installer.
+MESSAGE_URL="$SYNC_URL"
+RENDER_TO_MOTD=$RENDER_TO_MOTD
+EOF
+    chmod 0644 "$CONF_FILE"
+
+    cat > "$UPDATER" <<'UPD_EOF'
+#!/bin/sh
+# terminal-welcome-update - pull the banner from GitHub (DATA only) and refresh
+# cached values. Fails safe when offline (keeps the last banner).
+set -eu
+CONF=/etc/terminal-welcome/welcome.conf
+[ -r "$CONF" ] && . "$CONF"
+: "${MESSAGE_URL:?MESSAGE_URL not set}"
+STATE=/etc/terminal-welcome/message
+CACHE=/var/lib/terminal-welcome
+RENDERER=/usr/local/sbin/terminal-welcome-render
+mkdir -p "$CACHE"
+tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --max-time 15 --retry 2 "$MESSAGE_URL" -o "$tmp" 2>/dev/null && ok=1 || ok=0
+elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 15 -t 2 -O "$tmp" "$MESSAGE_URL" && ok=1 || ok=0
+else ok=0; fi
+if [ "$ok" = 1 ]; then
+    LC_ALL=C tr -cd '\11\12\40-\176\200-\377' < "$tmp" > "$STATE.new" && mv -f "$STATE.new" "$STATE"
+    chmod 0644 "$STATE"
+fi
+p=$(curl -fs --max-time 4 https://api.ipify.org 2>/dev/null || true)
+case "$p" in ''|*[!0-9.]*) : ;; *) printf '%s' "$p" > "$CACHE/pubip" ;; esac
+if [ -x /usr/lib/update-notifier/apt-check ]; then u=$(/usr/lib/update-notifier/apt-check 2>&1 | cut -d';' -f1)
+elif command -v apt-get >/dev/null 2>&1; then u=$(apt-get -s upgrade 2>/dev/null | awk '/^Inst/{c++}END{print c+0}')
+else u=0; fi
+case "$u" in ''|0) : > "$CACHE/updates" ;; *) printf '%s updates' "$u" > "$CACHE/updates" ;; esac
+if [ "${RENDER_TO_MOTD:-false}" = "true" ] && [ -x "$RENDERER" ] && [ -r "$STATE" ]; then
+    [ -L /etc/motd ] && rm -f /etc/motd
+    "$RENDERER" > /etc/motd.new 2>/dev/null && mv -f /etc/motd.new /etc/motd && chmod 0644 /etc/motd
+fi
+UPD_EOF
+    chmod 0755 "$UPDATER"; chown root:root "$UPDATER"
+
+    if has_systemd; then
+        rm -f "$CRON"
+        cat > "$SVC" <<EOF
+[Unit]
+Description=Sync terminal welcome banner from GitHub
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=$UPDATER
+EOF
+        cat > "$TIMER" <<EOF
+[Unit]
+Description=Periodically sync the terminal welcome banner
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=${SYNC_INTERVAL}min
+RandomizedDelaySec=60
+[Install]
+WantedBy=timers.target
+EOF
+        systemctl daemon-reload
+        systemctl enable --now terminal-welcome.timer
+    elif command -v crontab >/dev/null 2>&1 || [ -d /etc/cron.d ] || mkdir -p /etc/cron.d 2>/dev/null; then
+        rm -f "$SVC" "$TIMER"
+        printf '*/%s * * * * root %s >/dev/null 2>&1\n' "$SYNC_INTERVAL" "$UPDATER" > "$CRON"
+        chmod 0644 "$CRON"
+    fi
+    "$UPDATER" || echo "WARNING: initial sync failed - will retry on schedule." >&2
+}
+
 # ---- Install (one action of the menu) ---------------------------------------
 
 do_install() {
+local mode="${1:-local}"
 RENDER_TO_MOTD=true
 use_update_motd_d && RENDER_TO_MOTD=false
 
@@ -89,14 +179,8 @@ for c in ip ss awk sed; do command -v "$c" >/dev/null 2>&1 || missing="$missing 
 [[ -n "$missing" ]] && echo "NOTE: missing tools (some tokens will be blank):$missing" \
     "- install iproute2 / procps / coreutils / gawk for full output." >&2
 
-echo "Installing terminal-welcome (local; no GitHub sync) ..."
+echo "Installing terminal-welcome ($mode) ..."
 mkdir -p "$CONF_DIR" "$CACHE_DIR"
-
-# Migrate any older 'GitHub-synced' install to local-only: stop and remove the
-# sync timer/cron/updater and its config so nothing is ever fetched again.
-if has_systemd; then systemctl disable --now terminal-welcome.timer 2>/dev/null || true; fi
-rm -f "$TIMER" "$SVC" "$CRON" "$UPDATER" "$CONF_FILE"
-has_systemd && { systemctl daemon-reload 2>/dev/null || true; }
 
 # Back up the existing /etc/motd once (records a symlink as text; copies a real file).
 if [[ ! -e "$MOTD_BACKUP" ]]; then
@@ -416,8 +500,17 @@ if [[ "$RENDER_TO_MOTD" == true ]]; then
     chmod 0644 /etc/motd 2>/dev/null || true
 fi
 
+# Turn GitHub sync on (this run) or off (local mode removes any sync job).
+if [[ "$mode" == sync ]]; then install_sync; else remove_sync; fi
+
 echo
-echo "Installed. Banner is live — fully local, no GitHub sync."
+if [[ "$mode" == sync ]]; then
+    echo "Installed. GitHub sync is ON — pulls the banner every ${SYNC_INTERVAL} min from:"
+    echo "    $SYNC_URL"
+    echo "  (host edits get overwritten by the sync; change message.txt in the repo)"
+else
+    echo "Installed. Banner is live — fully local, no GitHub sync."
+fi
 echo "  Render   : $( use_update_motd_d && echo 'live at each login (/etc/update-motd.d)' || echo 'onto /etc/motd now (snapshot on this distro; live in interactive shells)' )"
 echo "  Menu     : sudo terminal-welcome     (edit / preview / uninstall - local, no network)"
 echo "  Edit file: sudo nano $STATE"
@@ -436,13 +529,16 @@ echo "----------------------------------------"
   declare -p CONF_DIR CACHE_DIR STATE MOTD_BACKUP DISABLED_LIST UPDATER RENDERER \
              LOCAL_UNINSTALL LAUNCHER MOTDD_SCRIPT MOTDD_LEGACY PROFILE_SNIPPET \
              BASHRC SVC TIMER CRON HOOK_MARK
-  declare -f has_systemd uninstall_body do_preview do_edit menu_local
+  declare -f has_systemd uninstall_body tw_clear tw_pause do_preview do_edit menu_local
   printf 'menu_local\n'
 } > "$LAUNCHER"
 chmod 0755 "$LAUNCHER"; chown root:root "$LAUNCHER"
 }
 
 # ---- Menu actions -----------------------------------------------------------
+
+tw_clear() { command clear 2>/dev/null || printf '\033[2J\033[3J\033[H'; }
+tw_pause() { printf '\n  [enter] to continue '; read -r _ <&3 || true; }
 
 do_preview() {
     if [[ -x "$RENDERER" ]]; then "$RENDERER" || true; else echo "(not installed yet — choose Install)"; fi
@@ -459,12 +555,13 @@ do_edit() {
 menu_local() {
     exec 3</dev/tty 2>/dev/null || { echo "no terminal"; exit 1; }
     while true; do
-        printf '\n  Terminal Welcome Message\n  ========================\n'
-        printf '   1) Edit the banner\n   2) Preview\n   3) Uninstall\n   4) Quit\n  Choose [1-4]: '
+        tw_clear
+        printf '  Terminal Welcome Message\n  ========================\n\n'
+        printf '   1) Edit the banner\n   2) Preview\n   3) Uninstall\n   4) Quit\n\n  Choose [1-4]: '
         read -r c <&3 || c=4
         case "$c" in
-            1) do_edit ;;
-            2) do_preview; printf '\n  [enter] '; read -r _ <&3 || true ;;
+            1) do_edit; tw_pause ;;
+            2) do_preview; tw_pause ;;
             3) uninstall_body; exit 0 ;;
             4) exit 0 ;;
             *) : ;;
@@ -472,26 +569,31 @@ menu_local() {
     done
 }
 
-# Full menu for the installer (adds Install / update).
+# Full menu for the installer (adds Install / update + GitHub sync).
 menu() {
     while true; do
-        printf '\n  Terminal Welcome Message\n  ========================\n'
-        printf '   1) Install / update (local)\n   2) Edit the banner\n   3) Preview\n   4) Uninstall\n   5) Quit\n  Choose [1-5]: '
-        read -r c <&3 || c=5
+        tw_clear
+        printf '  Terminal Welcome Message\n  ========================\n\n'
+        printf '   1) Install / update (local, no sync)\n   2) Install with GitHub sync\n   3) Edit the banner\n   4) Preview\n   5) Uninstall\n   6) Quit\n\n  Choose [1-6]: '
+        read -r c <&3 || c=6
         case "$c" in
-            1) do_install ;;
-            2) do_edit ;;
-            3) do_preview; printf '\n  [enter] '; read -r _ <&3 || true ;;
-            4) uninstall_body; exit 0 ;;
-            5) exit 0 ;;
+            1) do_install local; tw_pause ;;
+            2) do_install sync; tw_pause ;;
+            3) do_edit; tw_pause ;;
+            4) do_preview; tw_pause ;;
+            5) uninstall_body; exit 0 ;;
+            6) exit 0 ;;
             *) : ;;
         esac
     done
 }
 
-# ---- Entry point: real terminal -> menu; piped/no terminal -> just install ---
+# ---- Entry point: real terminal -> menu; piped/no terminal -> install --------
+#      TW_SYNC=1 selects GitHub-sync mode non-interactively (for automation/CI).
 if [[ -t 1 ]] && exec 3</dev/tty 2>/dev/null; then
     menu
+elif [[ "${TW_SYNC:-}" == 1 ]]; then
+    do_install sync
 else
-    do_install
+    do_install local
 fi
