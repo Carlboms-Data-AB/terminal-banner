@@ -17,7 +17,7 @@
 # preview / uninstall). Piped with no terminal (automation), it just installs.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-banner/main/setup.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/carlbomsdata/terminal-banner/main/setup.sh | sudo bash
 #
 # After installing, reopen the menu on the host (no network) with:
 #   sudo terminal-banner
@@ -47,7 +47,7 @@ HOOK_MARK="# >>> terminal-banner hook >>>"
 
 # GitHub-sync mode (optional, chosen from the menu): pull the banner from the repo
 # on a timer. Local mode (the default) never touches these.
-REPO_RAW="https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-banner/main"
+REPO_RAW="https://raw.githubusercontent.com/carlbomsdata/terminal-banner/main"
 SYNC_URL="${TW_SYNC_URL:-$REPO_RAW/message.txt}"
 SYNC_INTERVAL=15
 

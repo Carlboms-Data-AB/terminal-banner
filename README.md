@@ -10,7 +10,7 @@ and terminal login. **One command, a menu, no flags.**
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Carlboms-Data-AB/terminal-banner/main/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/carlbomsdata/terminal-banner/main/setup.sh | sudo bash
 ```
 
 It opens a menu — pick a number. Works on Raspberry Pi OS / Debian / Ubuntu /
